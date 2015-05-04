@@ -26,3 +26,8 @@
 *.exe
 *.out
 *.app
+
+# miscalous stuff
+*.sdf
+*.sln
+*.suo
