@@ -9,11 +9,11 @@
 #include <ctime>
 #include "CLUtil.hpp"
 #include <algorithm>
+#include "error_handling_methods.cpp"
+#include "CLPerfMarker.h"
 
 
 using namespace appsdk;
-
-
 
 #define SUCCESS 0
 #define FAILURE 1 
@@ -21,6 +21,7 @@ using namespace appsdk;
 
 
 #define SINGLETIME true 
+#define PROFILE true
 
 #define WIDTH  500
 #define HEIGHT 500
@@ -106,11 +107,11 @@ int buildProgram(cl_program *program);
 
 int readArgs(int argc, char* argv[]);
 
-void getKernelArgSetError(int status);
+//void getKernelArgSetError(int status);
 
 int checkAgainstCpuImplementation(float *origInput, float *clOutput);
 
-void getExecutionError(int status);
+//void getExecutionError(int status);
 
 int chekMemSimilar(float* openCl, float* referance, int length);
 
@@ -118,10 +119,13 @@ cl_int parseStringToPositions(std::string str);
 
 cl_int parseStringToWeights(std::string str);
 
-int createKernels(cl_kernel* kernel, cl_kernel* kernelBackwards, cl_program* program);
+int setupKernelSpesificStuff(cl_uint* work_dim, size_t *global_work_size, size_t **local_work_size, 
+				cl_context* context, cl_kernel* kernel, cl_kernel* kernelBackwards, cl_program* program);
 
-int setWorkSizes(cl_uint* work_dim, size_t *global_work_size, size_t **local_work_size, 
-				cl_context* context, cl_kernel* kernel, cl_kernel* kernelBackwards);
+//int createKernels(cl_kernel* kernel, cl_kernel* kernelBackwards, cl_program* program);
+
+//int setWorkSizes(cl_uint* work_dim, size_t *global_work_size, size_t **local_work_size, 
+//				cl_context* context, cl_kernel* kernel, cl_kernel* kernelBackwards);
 
 cl_int getEdgeWidth();
 
