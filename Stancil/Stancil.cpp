@@ -1,13 +1,8 @@
 // Stancil.cpp : Defines the entry point for the console application.
 //
-
-//#include "stdafx.h"
-
 #include "Stancil.hpp"
 
-  
 
- 
 using namespace std;
 
 int main(int argc, char* argv[])
@@ -15,6 +10,17 @@ int main(int argc, char* argv[])
 	
 	sampleTimer = new SDKTimer();
 	timer = sampleTimer->createTimer();
+
+	if(PROFILE){
+		status = clInitializePerfMarkerAMD();
+		if( status != AP_SUCCESS){
+			cout << "Initilasation of App Profiler failed: " << status << endl;
+			getAppProfilerInitError(status);
+		}
+		if(clBeginPerfMarkerAMD( "KernelProfiler", "Group1") != AP_SUCCESS){
+			cout << "Begin of App Profiler failed" << endl;
+		}
+	}
 	
 	if(readArgs(argc, argv) == SDK_FAILURE){
 		freeResources();
@@ -67,21 +73,18 @@ int main(int argc, char* argv[])
 	sampleTimer->resetTimer(timer);
 	sampleTimer->startTimer(timer);
 	
-
+	/*Step 8: Create kernel object */
 	cl_kernel 
 	kernel = NULL, 
 	kernelBackwards = NULL;
 
-	/*Step 8: Create kernel object */
-	status = createKernels(&kernel, &kernelBackwards, &program);
-	if(status != SUCCESS){
-		cout << "Abording!" << endl;
-		freeResources();
-		return FAILURE;
-	}
+	cl_uint work_dim;
+	size_t *global_work_size = (size_t*) malloc(2*sizeof(size_t));
+	size_t *local_work_size = (size_t*) malloc(2*sizeof(size_t));
 
-	status = setBufferKernelArgs(&kernel, &kernelBackwards, &context);
-	if(status != SUCCESS){
+	status = setupKernelSpesificStuff(&work_dim, global_work_size, &local_work_size, &context,
+				&kernel, &kernelBackwards, &program);
+	if (status == FAILURE){
 		cout << "Abording!" << endl;
 		freeResources();
 		return FAILURE;
@@ -100,25 +103,14 @@ int main(int argc, char* argv[])
 	    
     	cout << "Max kernel work gorup size: " << kernelInfo.kernelWorkGroupSize << endl;
 	}
-	cl_uint work_dim;
-	size_t *global_work_size = (size_t*) malloc(2*sizeof(size_t));
-	size_t *local_work_size = (size_t*) malloc(2*sizeof(size_t));
-
-
-	status = setWorkSizes(&work_dim, global_work_size, &local_work_size, &context,
-				&kernel, &kernelBackwards);
-	if (status == FAILURE){
-		cout << "Abording!" << endl;
-		freeResources();
-		return FAILURE;
-	}
 
 	status = runKernels(&kernel, &kernelBackwards, &commandQueue, work_dim, global_work_size, local_work_size);
 
 	sampleTimer->resetTimer(timer);
 	sampleTimer->startTimer(timer);
 	/*Step 11: Read the output back to host memory.*/
-	status = clEnqueueReadBuffer(commandQueue, BufferMatrixA, CL_TRUE, 0, width * height * sizeof(cl_float), output, 0, NULL, NULL);
+	status = clEnqueueReadBuffer(commandQueue, BufferMatrixA, CL_TRUE, 0, 
+		width * height * sizeof(cl_float), output, 0, NULL, NULL);
 
 	sampleTimer->stopTimer(timer);
 	times.writeBack = sampleTimer->readTimer(timer);
@@ -157,6 +149,15 @@ int main(int argc, char* argv[])
 	sampleTimer->stopTimer(timer);
 	times.releaseKernel = sampleTimer->readTimer(timer);
 	
+	if(PROFILE){
+		if( clEndPerfMarkerAMD() != AP_SUCCESS){
+			cout << "Error ending Profiler" << endl;
+		}
+		if( clFinalizePerfMarkerAMD() != AP_SUCCESS){
+			cout << "Error ending Profiler" << endl;
+		}
+
+	}
 
 	if(!ComandArgs->verify){
 		checkAgainstCpuImplementation(input, output);
@@ -235,7 +236,8 @@ void StupidCPUimplementation(float *in, float *out, int width, int height){
 			out[num] = in[num];
 		}
 		else{
-			out[num] = (in[num - 1] + in[num + 1] + in[num - width] + in[num + width])/4; //-4 * in[num] + in[num - 1] + in[num + 1] + in[num - width] + in[num + width];
+			out[num] = (in[num - 1] + in[num + 1] + in[num - width] + in[num + width])/4; 
+			//-4 * in[num] + in[num - 1] + in[num + 1] + in[num - width] + in[num + width];
 		}
 	}
 }
@@ -265,8 +267,9 @@ void StupidDynamicCPUImplementation(float *in, float *out,
 		out[num] = sum/numberPoints;
 	}
 }
+
+/*Step1: Getting platforms and choose an available one.*/
 int getPlatforms(void){
-	/*Step1: Getting platforms and choose an available one.*/
 
 	status = clGetPlatformIDs(0, NULL, &numPlatforms);
 
@@ -302,8 +305,8 @@ int getPlatforms(void){
 	
 }
 
+/*Step 2:Query the platform and choose the first GPU device if has one.Otherwise use the CPU as device.*/
 int getDevice(void){
-	/*Step 2:Query the platform and choose the first GPU device if has one.Otherwise use the CPU as device.*/
 	if(device.compare("cpu") == 0){
 		status = clGetDeviceIDs(platform, CL_DEVICE_TYPE_CPU, 0, NULL, &numDevices);
 		if(!ComandArgs->quiet){
@@ -437,15 +440,20 @@ int PrintDeviceInfo(int type){
 }
 
 int runCpuImplementation(){
-	if(!ComandArgs->quiet){
-		cout << "you selected the stupid cpu implementation!" << endl;
-	}
+	srand (static_cast <unsigned> (time(0)));
 
 	float *inputcpu = (float*)malloc(sizeof(float) * width * height);
 	fill(inputcpu, inputcpu + (width*height), 1.0);
 
+	for (int i = width; i < (width*height)-width; i++){
+		if(i%width == 0 || i%width == (width-1)){
+			continue;
+		}
+		inputcpu[i] = static_cast <float> (rand()) / (static_cast <float> (RAND_MAX/10));
+	}
+	
 	float *outputcpu = (float*)malloc(sizeof(float) * width * height);
-	memset(outputcpu, 0, sizeof(float) * width * height);
+	memcpy(outputcpu, inputcpu, sizeof(float) * width * height);
 
 	int timer = sampleTimer->createTimer();
 	sampleTimer->resetTimer(timer);
@@ -509,46 +517,12 @@ int runCpuImplementation(){
 	return SUCCESS;
 }
 
+/*Step 6: Build program. */
 int buildProgram(cl_program *program){
-	/*Step 6: Build program. */
 	status = clBuildProgram(*program, 1, aktiveDevice, NULL, NULL, NULL);
+	
 	if (status != SUCCESS){
-		fprintf(stderr, "Building Program failed. error code: ");
-		cout << status << endl;
-		switch (status)
-		{
-		case CL_INVALID_PROGRAM:
-			cout << "Invalid Program" << endl;
-			break;
-		case CL_INVALID_VALUE:
-			cout << "Invalid Value" << endl;
-			break;
-		case CL_INVALID_DEVICE:
-			cout << "Invalid Device" << endl;
-			break;
-		case CL_INVALID_BINARY:
-			cout << "Invalid Binary" << endl;
-			break;
-		case CL_INVALID_BUILD_OPTIONS:
-			cout << "Invalid Build Options" << endl;
-			break;
-		case CL_INVALID_OPERATION:
-			cout << "Invalid Operation" << endl;
-			break;
-		case CL_COMPILER_NOT_AVAILABLE:
-			cout << "Compiler Not Available" << endl;
-			break;
-		case CL_BUILD_PROGRAM_FAILURE:
-			cout << "Build Program Failure" << endl;
-			break;
-		case CL_OUT_OF_HOST_MEMORY:
-			cout << "Out Of Host Memory" << endl;
-			break;
-
-		default:
-			cout << "Unknown Error" << endl;
-			break;
-		}
+		buildProgramError(status);
 		return FAILURE;
 	}
 	else{
@@ -556,12 +530,24 @@ int buildProgram(cl_program *program){
 	 		cout << "Building Programm Sucsessfull" << endl;
 		}
 	}
+	if(!ComandArgs->quiet || status != SUCCESS){
+		// Get log information
+	    size_t log_size;
+	    clGetProgramBuildInfo(*program, *aktiveDevice, CL_PROGRAM_BUILD_LOG, 0, NULL, &log_size);
+
+	    char *log; 
+	    log = (char *) malloc(log_size);
+
+	    clGetProgramBuildInfo(*program, *aktiveDevice, CL_PROGRAM_BUILD_LOG, log_size, log, NULL);
+
+	    printf("%s\n", log);
+	    free(log);
+	}
+
 	return SUCCESS;
 }
 
 int readArgs(int argc, char* argv[]){
-
-	//bool verify = false;
 
 	ComandArgs = new CLCommandArgs();
 	ComandArgs->sampleVerStr = SAMPLE_VERSION;
@@ -572,7 +558,7 @@ int readArgs(int argc, char* argv[]){
 		cout << "Read Command Arguments Failed!" << endl;
 		return SDK_FAILURE;
 	}
-	// delete default Options i don't ned
+	// delete default Options I don't need
 	Option* tParam = new Option;
 	CHECK_ALLOCATION(tParam, "Memory Allocation error.\n");
 	tParam->_sVersion = "t";
@@ -596,7 +582,7 @@ int readArgs(int argc, char* argv[]){
 	delete longParam;
 	
 
-	// add special Options that i do ned
+	// add special Options I do ned
 	Option* wParam = new Option;
 	CHECK_ALLOCATION(wParam, "Memory Allocation error.\n");
 	wParam->_sVersion = "we";
@@ -708,32 +694,6 @@ int readArgs(int argc, char* argv[]){
 	return SUCCESS;
 }
 
-void getKernelArgSetError(int status){
-	switch (status){
-		case CL_INVALID_KERNEL: 
-			cout << "Invalid Kernel" << endl;
-			break;
-		case CL_INVALID_ARG_INDEX:
-			cout << "Invalid ARG INDEX" << endl;
-			break;
-		case CL_INVALID_ARG_VALUE:
-			cout << "Invalid ARG Value" << endl;
-			break;
-		case CL_INVALID_MEM_OBJECT:
-			cout <<	"Invalid MEM Object" << endl;
-			break;
-		case CL_INVALID_SAMPLER:
-			cout << "Invalid Sampler" << endl;
-			break;
-		case CL_INVALID_ARG_SIZE:
-			cout << "Invalid ARG Size" << endl;
-			break;
-		default:
-			cout << "Unknown Error" << endl;
-			break;
-	}
-}
-
 int checkAgainstCpuImplementation(float *origInput, float *clOutput){
 	if(!ComandArgs->quiet){
 		cout << "\nChecking result against referance cpu implementation :" << endl;
@@ -763,7 +723,6 @@ int checkAgainstCpuImplementation(float *origInput, float *clOutput){
 		for (int e = 0; e < iterations; e++){
 			StupidDynamicCPUImplementation(inout, workmem, width, height, positions, weights, numberPoints);
 			StupidDynamicCPUImplementation(workmem, inout, width, height, positions, weights, numberPoints);
-			//inout=workmem;
 		}
 	}
 	else{
@@ -837,54 +796,6 @@ int checkAgainstCpuImplementation(float *origInput, float *clOutput){
 	return SDK_SUCCESS;
 }
 
-void getExecutionError(int status){
-	switch (status){
-	case CL_INVALID_WORK_ITEM_SIZE:
-		cout << " Invailid work item size" << endl;
-	break;
-	case CL_INVALID_EVENT_WAIT_LIST:
-		cout << " Invailid event wait list" << endl;
-	break;
-	case CL_MEM_OBJECT_ALLOCATION_FAILURE:
-		cout << " mem object allocation failure" << endl;
-	break;
-	  
-	case CL_INVALID_WORK_DIMENSION:
-		cout << " Invaild work dimension" << endl;
-	break;
-	case CL_INVALID_PROGRAM_EXECUTABLE:
-		cout << " Invalid program executable" << endl;
-	break;
-	case CL_INVALID_COMMAND_QUEUE:
-		cout << " CL_INVALID_COMMAND_QUEUE" << endl;
-	break;
-	case CL_INVALID_KERNEL:
-		cout << " CL_INVALID_KERNEL" << endl;
-	break;
-	case CL_INVALID_CONTEXT:
-		cout << " CL_INVALID_CONTEXT" << endl;
-	break;
-	case CL_INVALID_KERNEL_ARGS:
-		cout << " CL_INVALID_KERNEL_ARGS" << endl;
-	break;
-	case CL_INVALID_WORK_GROUP_SIZE:
-		cout << " CL_INVALID_WORK_GROUP_SIZE" << endl;
-	break;
-	case CL_INVALID_GLOBAL_OFFSET:
-		cout << " CL_INVALID_GLOBAL_OFFSET" << endl;
-	break;
-	case CL_OUT_OF_HOST_MEMORY:
-		cout << " CL_OUT_OF_HOST_MEMORY" << endl;
-	break;
-	case CL_OUT_OF_RESOURCES:
-		cout << " CL_OUT_OF_RESOURCES" << endl;
-	break;
-	default:
-		cout <<" unknown error" << endl;
-	break;
-	}
-}
-
 int chekMemSimilar(float* openCl, float* referance, int length){
 	float test;
 	float maxDiff = 0;
@@ -945,7 +856,8 @@ cl_int parseStringToPositions(std::string str){
 
 	free(helper);
 
-	//cout << "first 4 numbers are:: " << positions[0] << " " << positions[1] << " " << positions[2] << " " << positions[3] << endl;
+	//cout << "first 4 numbers are:: " << positions[0] << " " << positions[1] << " " 
+									//<< positions[2] << " " << positions[3] << endl;
 	return e/2;
 }
 
@@ -977,7 +889,8 @@ cl_int parseStringToWeights(std::string str){
 			}
 			if (str[i] == '.'){
 				if(dot == true){
-					cout << "ERROR while pasing weights string: number with multiple dots; maybe you missed a ," << endl;
+					cout << "ERROR while pasing weights string: number with "
+								<< "multiple dots; maybe you missed a ," << endl;
 					return FAILURE;
 				} 
 				dot = true;
@@ -993,7 +906,8 @@ cl_int parseStringToWeights(std::string str){
 			}
 		}
 		if (dot){
-		//	cout << "result " << result << " 10^dotcount " << (pow(10,dotcount)) << " dotcount: " << dotcount << endl;
+		//	cout << "result " << result << " 10^dotcount " << (pow(10,dotcount)) 
+							//<< " dotcount: " << dotcount << endl;
 			result = result/ pow(10,dotcount);	
 		} 
 		if (negativ)	result = -result;
@@ -1010,109 +924,67 @@ cl_int parseStringToWeights(std::string str){
 
 	free(helper);
 	cout << " nubmer of weights: "<< e << endl;
-	cout << " first 4 numbers are: " << weights[0] << " " << weights[1] << " " << weights[2] << " " << weights[3] << endl;
+	cout << " first 4 numbers are: " << weights[0] << " " << weights[1] << " " 
+									 << weights[2] << " " << weights[3] << endl;
 
 	return e;
-
 }
 
+int setupKernelSpesificStuff(cl_uint* work_dim, size_t *global_work_size, size_t **local_work_size, 
+				cl_context* context, cl_kernel* kernel, cl_kernel* kernelBackwards, cl_program* program){
 
-int createKernels(cl_kernel* kernel, cl_kernel* kernelBackwards, cl_program* program){
-	/*Step 8: Create kernel object */
 	switch (kernelVersion){
 		case 1:
 			*kernel = clCreateKernel(*program, "Stancil1", NULL);
 			*kernelBackwards = clCreateKernel(*program, "Stancil1", NULL);
-		break;
-		case 2:
-			*kernel = clCreateKernel(*program, "Stancil2", NULL);
-			*kernelBackwards = clCreateKernel(*program, "Stancil2", NULL);
-		break;
-		case 3:
-			*kernel = clCreateKernel(*program, "Stancil3", NULL);
-			*kernelBackwards = clCreateKernel(*program, "Stancil3", NULL);
-		break;
-		case 4:
-			*kernel = clCreateKernel(*program, "Stancil4", NULL);
-			*kernelBackwards = clCreateKernel(*program, "Stancil4", NULL); 
-		break;
-		case 5:
-			*kernel = clCreateKernel(*program, "Stancil4_1", NULL);
-			*kernelBackwards = clCreateKernel(*program, "Stancil4_1", NULL); 
-		break;
-		case 6:
-		
-			*kernel = clCreateKernel(*program, "dynamicStancil1", NULL);
-			*kernelBackwards = clCreateKernel(*program, "dynamicStancil1", NULL); 
-			
-			if(stancilWeights.compare("default") == 0){
-				cout << "no positions specifyed; using the default 5-Point-Stancil" << endl;
-				positions = (cl_int*)malloc(sizeof(cl_int) * 8);
-				positions[0] =  0;	positions[1] = -1;
-				positions[2] = -1;	positions[3] =  0;
-				positions[4] =  1;	positions[5] =  0;
-				positions[6] =  0;	positions[7] =  1;
 
-			//	0,-1, -1,0, 1,0, 0,1
-			}
-			else{
-				numberPoints = parseStringToPositions(stancilDefinition);
+			status = setBufferKernelArgs(kernel, kernelBackwards, context);
+			if(status != SUCCESS){
+				cout << "Abording!" << endl;
+				freeResources();
+				return FAILURE;
 			}
 
-			if(stancilWeights.compare("default") == 0){
-				cout << "no weights specifyed; assuming there all 1.0" << endl;
-				weights = (cl_float*)malloc(sizeof(cl_float) * numberPoints);
-				fill(weights, weights + numberPoints, 1.0);
-			}
-			else{
-				cl_int numberWeights = parseStringToWeights(stancilWeights);
-
-
-				if(numberWeights == FAILURE){
-					return FAILURE;
-				}
-				if(numberPoints != numberWeights){
-					cout << "ERROR: number of points and number of weights differ!"<< endl;
-					cout << "numberPoints = "<< numberPoints << " and numberWeights = " << numberWeights << endl;
-					return FAILURE;
-				}
-			}
-
-			cl_int edgewithlocal = getEdgeWidth();
-			setInputEdgesToOne(edgewithlocal);
-
-			edgewith = edgewithlocal;
-		break;
-	}
-	return SUCCESS;
-}
-
-int setWorkSizes(cl_uint* work_dim, size_t *global_work_size, size_t **local_work_size, cl_context* context,
-				cl_kernel* kernel, cl_kernel* kernelBackwards){
-
-	switch (kernelVersion){
-		case 1:
 			*work_dim = 1;
 			global_work_size[0] = width * height;
 			*local_work_size = NULL;
 		break;
-
 		case 2:
+			*kernel = clCreateKernel(*program, "Stancil2", NULL);
+			*kernelBackwards = clCreateKernel(*program, "Stancil2", NULL);
+
+			status = setBufferKernelArgs(kernel, kernelBackwards, context);
+			if(status != SUCCESS){
+				cout << "Abording!" << endl;
+				freeResources();
+				return FAILURE;
+			}
+
 			*work_dim = 2;
 			global_work_size[0] = width - 2;
 			global_work_size[1] = height - 2;
-			*local_work_size = NULL;//global_work_size[0]/(height-2);
+			*local_work_size = NULL;
 		break;
-
 		case 3:
+			*kernel = clCreateKernel(*program, "Stancil3", NULL);
+			*kernelBackwards = clCreateKernel(*program, "Stancil3", NULL);
+
+			status = setBufferKernelArgs(kernel, kernelBackwards, context);
+			if(status != SUCCESS){
+				cout << "Abording!" << endl;
+				freeResources();
+				return FAILURE;
+			}
+
 			*work_dim = 2;
 			global_work_size[0] = (width - 2);
 			global_work_size[1] = (height - 2);
 			(*local_work_size)[0] = 4;
 			(*local_work_size)[1] = 4;
 			
-			for (int i = min(global_work_size[0], (size_t) 16); i > 0; i--)		//(size_t)(sqrt(kernelInfo.kernelWorkGroupSize)) in min
+			for (int i = min(global_work_size[0], (size_t) 16); i > 0; i--)		
 			{
+				//(size_t)(sqrt(kernelInfo.kernelWorkGroupSize)) in min
 					if(global_work_size[0]%i == 0){
 					(*local_work_size)[0] = (*local_work_size)[1] = i;
 					break; 
@@ -1121,7 +993,7 @@ int setWorkSizes(cl_uint* work_dim, size_t *global_work_size, size_t **local_wor
 			if(!ComandArgs->quiet){
 				cout << "Using blocks of size: " << (*local_work_size)[0] <<" ; "<< (*local_work_size)[1] << endl;
 			}
-			/* Create local mem objects to cash blocks in */
+			// Create local mem objects to cash blocks in 
 			status = clSetKernelArg(*kernel, 4, ((*local_work_size)[0] + 2) * ((*local_work_size)[1] + 2) * sizeof(cl_float), NULL);
 		    CHECK_OPENCL_ERROR(status, "clSetKernelArg failed. (local memory)");
 
@@ -1137,12 +1009,22 @@ int setWorkSizes(cl_uint* work_dim, size_t *global_work_size, size_t **local_wor
 			}
 		break;
 		case 4:
-			*work_dim = 2;
-			
+			*kernel = clCreateKernel(*program, "Stancil4", NULL);
+			*kernelBackwards = clCreateKernel(*program, "Stancil4", NULL); 
+
+			status = setBufferKernelArgs(kernel, kernelBackwards, context);
+			if(status != SUCCESS){
+				cout << "Abording!" << endl;
+				freeResources();
+				return FAILURE;
+			}
+
+			//*work_dim = 2;
+			*work_dim = 1;	
 			global_work_size[0] = (width - 2);
-			global_work_size[1] = 4;
-			(*local_work_size)[0] = min((cl_uint)64,(width-2));
-			(*local_work_size)[1] = 4;
+			//global_work_size[1] = 4;
+			(*local_work_size)[0] = min((cl_uint)64,(width-2)); //64
+			//(*local_work_size)[1] = 4;
 			if(!ComandArgs->quiet){
 				cout <<" height  and    width     "<< height << " " << width << endl;
 
@@ -1152,6 +1034,16 @@ int setWorkSizes(cl_uint* work_dim, size_t *global_work_size, size_t **local_wor
 			}
 		break;
 		case 5:
+			*kernel = clCreateKernel(*program, "Stancil4_1", NULL);
+			*kernelBackwards = clCreateKernel(*program, "Stancil4_1", NULL); 
+
+			status = setBufferKernelArgs(kernel, kernelBackwards, context);
+			if(status != SUCCESS){
+				cout << "Abording!" << endl;
+				freeResources();
+				return FAILURE;
+			}
+
 			//work_dim = 2;
 			*work_dim = 1;
 			global_work_size[0] = (width - 2);
@@ -1202,6 +1094,53 @@ int setWorkSizes(cl_uint* work_dim, size_t *global_work_size, size_t **local_wor
 			}
 		break;
 		case 6:
+		
+			*kernel = clCreateKernel(*program, "dynamicStancil1", NULL);
+			*kernelBackwards = clCreateKernel(*program, "dynamicStancil1", NULL); 
+			
+			if(stancilWeights.compare("default") == 0){
+				cout << "no positions specifyed; using the default 5-Point-Stancil" << endl;
+				positions = (cl_int*)malloc(sizeof(cl_int) * 8);
+				positions[0] =  0;	positions[1] = -1;
+				positions[2] = -1;	positions[3] =  0;
+				positions[4] =  1;	positions[5] =  0;
+				positions[6] =  0;	positions[7] =  1;
+
+			//	0,-1, -1,0, 1,0, 0,1
+			}
+			else{
+				numberPoints = parseStringToPositions(stancilDefinition);
+			}
+
+			if(stancilWeights.compare("default") == 0){
+				cout << "no weights specifyed; assuming there all 1.0" << endl;
+				weights = (cl_float*)malloc(sizeof(cl_float) * numberPoints);
+				fill(weights, weights + numberPoints, 1.0);
+			}
+			else{
+				cl_int numberWeights = parseStringToWeights(stancilWeights);
+
+
+				if(numberWeights == FAILURE){
+					return FAILURE;
+				}
+				if(numberPoints != numberWeights){
+					cout << "ERROR: number of points and number of weights differ!"<< endl;
+					cout << "numberPoints = "<< numberPoints << " and numberWeights = " << numberWeights << endl;
+					return FAILURE;
+				}
+			}
+			cl_int edgewithlocal;
+			edgewithlocal = getEdgeWidth();
+			setInputEdgesToOne(edgewithlocal);
+			edgewith = edgewithlocal;
+
+			status = setBufferKernelArgs(kernel, kernelBackwards, context);
+			if(status != SUCCESS){
+				cout << "Abording!" << endl;
+				freeResources();
+				return FAILURE;
+			}
 
 			*work_dim = 2;
 			global_work_size[0] = width - 2*edgewith;
@@ -1211,7 +1150,8 @@ int setWorkSizes(cl_uint* work_dim, size_t *global_work_size, size_t **local_wor
 
 			
 
-			cl_mem BufferPositions = clCreateBuffer(
+			cl_mem BufferPositions;
+			BufferPositions = clCreateBuffer(
 				*context,
 				CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR,
 				sizeof(cl_int) * numberPoints*2,
@@ -1224,14 +1164,16 @@ int setWorkSizes(cl_uint* work_dim, size_t *global_work_size, size_t **local_wor
 				return FAILURE;
 			}
 
-			cl_mem BufferWeights = clCreateBuffer(
+			cl_mem BufferWeights;
+			BufferWeights = clCreateBuffer(
 				*context,
 				CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR,
 				sizeof(cl_float) * numberPoints,
 				weights,
 				&status);
 			if (status != SUCCESS){
-				fprintf(stderr, "clCreateBuffer failed. (BufferWeights) %i\nVGL: %i numberPoints: %i \n", status,CL_INVALID_HOST_PTR, numberPoints);
+				fprintf(stderr, "clCreateBuffer failed. (BufferWeights) %i\nVGL: %i numberPoints: %i \n", 
+														status,CL_INVALID_HOST_PTR, numberPoints);
 				freeResources();
 				return FAILURE;
 			}
@@ -1254,9 +1196,14 @@ int setWorkSizes(cl_uint* work_dim, size_t *global_work_size, size_t **local_wor
 	 
 				cout <<" lokal work size:  we "<< *local_work_size << endl;
 			}
-			break;
+		break;
+		default:
+			cout << "FATAL ERROR: specifyed kernel version does not exist! ("<< kernelVersion <<")"<< endl;
+			return FAILURE;
+
 	}
 	return SUCCESS;
+
 }
 
 cl_int getEdgeWidth(){
@@ -1377,7 +1324,8 @@ int setBufferKernelArgs(cl_kernel* kernel, cl_kernel* kernelBackwards, cl_contex
 }
 
 
-int runKernels(cl_kernel* kernel, cl_kernel* kernelBackwards, cl_command_queue* commandQueue, size_t work_dim, size_t *global_work_size, size_t *local_work_size){
+int runKernels(cl_kernel* kernel, cl_kernel* kernelBackwards, cl_command_queue* commandQueue,
+						 size_t work_dim, size_t *global_work_size, size_t *local_work_size){
 	sampleTimer->resetTimer(timer);
 	sampleTimer->startTimer(timer);
 	int timer2 = sampleTimer->createTimer();
@@ -1394,9 +1342,10 @@ int runKernels(cl_kernel* kernel, cl_kernel* kernelBackwards, cl_command_queue* 
 			sampleTimer->startTimer(timer2);
 		}
 
-		status = clEnqueueNDRangeKernel(*commandQueue, *kernel, work_dim, NULL, global_work_size, local_work_size, 0, NULL, &ndrEvt);
+		status = clEnqueueNDRangeKernel(*commandQueue, *kernel, work_dim, NULL, 
+								global_work_size, local_work_size, 0, NULL, &ndrEvt);
 		if (status != SUCCESS){
-			fprintf(stderr, "executing kernel failed. \n %i vgl %i\n ",status , CL_INVALID_WORK_ITEM_SIZE   ); //CL_INVALID_EVENT_WAIT_LIST CL_MEM_OBJECT_ALLOCATION_FAILURE CL_MEM_OBJECT_ALLOCATION_FAILURE  CL_INVALID_WORK_DIMENSION
+			fprintf(stderr, "executing kernel failed. %i \n ",status); 
 			getExecutionError(status);
 			freeResources();
 			return FAILURE;
@@ -1419,7 +1368,8 @@ int runKernels(cl_kernel* kernel, cl_kernel* kernelBackwards, cl_command_queue* 
 			}
 		}
 		
-		status = clEnqueueNDRangeKernel(*commandQueue, *kernelBackwards, work_dim, NULL, global_work_size, local_work_size, 0, NULL, &ndrEvt);
+		status = clEnqueueNDRangeKernel(*commandQueue, *kernelBackwards, work_dim, NULL, 
+										global_work_size, local_work_size, 0, NULL, &ndrEvt);
 		if (status != SUCCESS) fprintf(stderr, "executing kernel simply just for the second try failed. \n");
 		status = clFlush(*commandQueue);
 
@@ -1463,12 +1413,14 @@ void printStats(){
 
 	double SPS = ((width - 2)*(height - 2))/(times.kernelExecuting/iterations);
 
-	//cout << "Testoutput: this should be constant with different iterations!: " << (times.kernelExecuting/iterations) << endl;
+	//cout << "Testoutput: this should be constant with different iterations!: " 
+								//<< (times.kernelExecuting/iterations) << endl;
 	if(!ComandArgs->quiet){
 		cout << "we had: " << (width - 2)*(height - 2) << " single Stancil calculations" << endl;
 		cout << "this makes: ";
 	}
-	cout <<"\n"<< SPS << " SPS (Stancils Per Second)\n" << SPS/1000 << " KSPS (Kilo Stancils Per Second)\n" << SPS/1000000 << " MSPS (Mega Stancils Per Second) \n" << SPS/1000000000 << " GSPS (Giga Stancils Per Second) \n" << endl;
+	cout <<"\n"<< SPS << " SPS (Stancils Per Second)\n" << SPS/1000 << " KSPS (Kilo Stancils Per Second)\n" << SPS/1000000 
+			<< " MSPS (Mega Stancils Per Second) \n" << SPS/1000000000 << " GSPS (Giga Stancils Per Second) \n" << endl;
 	if(!ComandArgs->quiet){
 		cout << "Finisched!" << endl;
 	}
