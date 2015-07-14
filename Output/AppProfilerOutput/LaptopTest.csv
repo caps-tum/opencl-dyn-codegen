@@ -1,0 +1,19 @@
+# ProfilerVersion=2.5.1804
+# Application=/home/moe/Dokumente/Bachelorarbeit/Stancil/bin/x86_64/Release/Stancil
+# ApplicationArgs=-we 20 -he 20 -i 4 -kv 2
+# Device Intel(R) Core(TM) i5-3317U CPU @ 1.70GHz PlatformVendor=Advanced Micro Devices, Inc.
+# Device Intel(R) Core(TM) i5-3317U CPU @ 1.70GHz PlatformName=AMD Accelerated Parallel Processing
+# Device Intel(R) Core(TM) i5-3317U CPU @ 1.70GHz PlatformVersion=OpenCL 1.2 AMD-APP (1445.5)
+# Device Intel(R) Core(TM) i5-3317U CPU @ 1.70GHz CLDriverVersion=1445.5 (sse2,avx)
+# Device Intel(R) Core(TM) i5-3317U CPU @ 1.70GHz CLRuntimeVersion=OpenCL 1.2 AMD-APP (1445.5)
+# Device Intel(R) Core(TM) i5-3317U CPU @ 1.70GHz NumberAppAddressBits=64
+# OS=Ubuntu 15.04 \n \l
+Method , ExecutionOrder , ThreadID , CallIndex , GlobalWorkSize , WorkGroupSize , Time , LocalMemSize , VGPRs , SGPRs , ScratchRegs , FCStacks
+Stancil2__k1_CPU ,     1 , 23168 , 33 , {     18      18       1} , NULL ,         0.01951 ,           0 , NA , NA , NA , NA
+Stancil2__k2_CPU ,     2 , 23168 , 35 , {     18      18       1} , NULL ,         0.00942 ,           0 , NA , NA , NA , NA
+Stancil2__k1_CPU ,     3 , 23168 , 37 , {     18      18       1} , NULL ,         0.00968 ,           0 , NA , NA , NA , NA
+Stancil2__k2_CPU ,     4 , 23168 , 39 , {     18      18       1} , NULL ,         0.00933 ,           0 , NA , NA , NA , NA
+Stancil2__k1_CPU ,     5 , 23168 , 41 , {     18      18       1} , NULL ,         0.00817 ,           0 , NA , NA , NA , NA
+Stancil2__k2_CPU ,     6 , 23168 , 43 , {     18      18       1} , NULL ,         0.00906 ,           0 , NA , NA , NA , NA
+Stancil2__k1_CPU ,     7 , 23168 , 45 , {     18      18       1} , NULL ,         0.00872 ,           0 , NA , NA , NA , NA
+Stancil2__k2_CPU ,     8 , 23168 , 47 , {     18      18       1} , NULL ,         0.00883 ,           0 , NA , NA , NA , NA
